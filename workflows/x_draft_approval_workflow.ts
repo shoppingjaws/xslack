@@ -36,6 +36,18 @@ const openFormStep = XDraftApprovalWorkflow.addStep(
           long: true,
           description: "Xに投稿するテキスト（280文字以内）",
         },
+        {
+          name: "scheduled_date",
+          title: "予約投稿日",
+          type: Schema.slack.types.date,
+          description: "投稿を予約する日付（任意）",
+        },
+        {
+          name: "scheduled_time",
+          title: "予約投稿時刻",
+          type: Schema.types.string,
+          description: "投稿を予約する時刻（HH:MM形式、任意）",
+        },
       ],
       required: ["draft_text"],
     },
@@ -45,6 +57,8 @@ const openFormStep = XDraftApprovalWorkflow.addStep(
 XDraftApprovalWorkflow.addStep(PostXDraftForApprovalFunctionDefinition, {
   draft_text: openFormStep.outputs.fields.draft_text,
   author_user_id: XDraftApprovalWorkflow.inputs.user_id,
+  scheduled_date: openFormStep.outputs.fields.scheduled_date,
+  scheduled_time: openFormStep.outputs.fields.scheduled_time,
 });
 
 export default XDraftApprovalWorkflow;

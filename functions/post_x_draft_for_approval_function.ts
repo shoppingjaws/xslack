@@ -1,7 +1,9 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
 import { SlackAPI } from "deno-slack-api/mod.ts";
+import { TriggerTypes } from "deno-slack-api/mod.ts";
 import { createSlackLogger } from "./libs/logger.ts";
 import { postTweet } from "./libs/x_api_client.ts";
+import PostScheduledTweetWorkflow from "../workflows/post_scheduled_tweet_workflow.ts";
 
 const APPROVE_ACTION_ID = "x_draft_approve";
 const REJECT_ACTION_ID = "x_draft_reject";
@@ -29,6 +31,14 @@ export const PostXDraftForApprovalFunctionDefinition = DefineFunction({
       author_user_id: {
         type: Schema.slack.types.user_id,
         description: "User who authored the draft",
+      },
+      scheduled_date: {
+        type: Schema.types.string,
+        description: "Scheduled post date (YYYY-MM-DD, optional)",
+      },
+      scheduled_time: {
+        type: Schema.types.string,
+        description: "Scheduled post time (HH:MM, optional)",
       },
     },
     required: ["draft_text", "author_user_id"],
@@ -72,59 +82,73 @@ export default SlackFunction(
       ? `${charCount}/280`
       : `${charCount}/280 (over limit!)`;
 
+    const hasSchedule = inputs.scheduled_date && inputs.scheduled_time;
+    const scheduleText = hasSchedule
+      ? `*予約投稿:* ${inputs.scheduled_date} ${inputs.scheduled_time} (JST)`
+      : "*予約投稿:* なし（承認後に即投稿）";
+
+    const blocks = [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: "X投稿ドラフト - 承認リクエスト",
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*投稿者:* <@${inputs.author_user_id}>`,
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*投稿内容:*\n>>> ${inputs.draft_text}`,
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: scheduleText,
+        },
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `文字数: *${charStatus}*`,
+          },
+        ],
+      },
+      {
+        type: "actions",
+        block_id: "x_draft_actions",
+        elements: [
+          {
+            type: "button",
+            action_id: APPROVE_ACTION_ID,
+            text: { type: "plain_text", text: "Approve" },
+            style: "primary",
+          },
+          {
+            type: "button",
+            action_id: REJECT_ACTION_ID,
+            text: { type: "plain_text", text: "Reject" },
+            style: "danger",
+          },
+        ],
+      },
+    ];
+
     const postResult = await client.chat.postMessage({
       channel: approvalChannelId,
       text: `X投稿ドラフト by <@${inputs.author_user_id}>`,
-      blocks: [
-        {
-          type: "header",
-          text: {
-            type: "plain_text",
-            text: "X投稿ドラフト - 承認リクエスト",
-          },
-        },
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `*投稿者:* <@${inputs.author_user_id}>`,
-          },
-        },
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `*投稿内容:*\n>>> ${inputs.draft_text}`,
-          },
-        },
-        {
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: `文字数: *${charStatus}*`,
-            },
-          ],
-        },
-        {
-          type: "actions",
-          block_id: "x_draft_actions",
-          elements: [
-            {
-              type: "button",
-              action_id: APPROVE_ACTION_ID,
-              text: { type: "plain_text", text: "Approve" },
-              style: "primary",
-            },
-            {
-              type: "button",
-              action_id: REJECT_ACTION_ID,
-              text: { type: "plain_text", text: "Reject" },
-              style: "danger",
-            },
-          ],
-        },
-      ],
+      blocks,
     });
 
     if (!postResult.ok) {
@@ -150,85 +174,177 @@ export default SlackFunction(
       getEnv(env, "X_APPROVAL_CHANNEL_ID");
     const draftText = body.function_data.inputs.draft_text;
     const authorUserId = body.function_data.inputs.author_user_id;
+    const scheduledDate = body.function_data.inputs.scheduled_date;
+    const scheduledTime = body.function_data.inputs.scheduled_time;
 
     if (action.action_id === APPROVE_ACTION_ID) {
       try {
-        const credentials = {
-          consumerKey: getEnv(env, "X_CONSUMER_KEY"),
-          consumerSecret: getEnv(env, "X_CONSUMER_SECRET"),
-          accessToken: getEnv(env, "X_ACCESS_TOKEN"),
-          accessTokenSecret: getEnv(env, "X_ACCESS_TOKEN_SECRET"),
-        };
+        // 予約日時の判定
+        let shouldSchedule = false;
+        let scheduledISOString = "";
 
-        // Debug: print directly to terminal (not via Slack logger)
-        console.log("[DEBUG] X credentials:", {
-          consumerKey: credentials.consumerKey.substring(0, 5) + "...",
-          consumerSecret: credentials.consumerSecret.substring(0, 5) +
-            "...",
-          accessToken: credentials.accessToken.substring(0, 5) + "...",
-          accessTokenSecret: credentials.accessTokenSecret.substring(
-            0,
-            5,
-          ) + "...",
-        });
+        if (scheduledDate && scheduledTime) {
+          const scheduledDateTime = new Date(
+            `${scheduledDate}T${scheduledTime}:00+09:00`,
+          );
+          const now = new Date();
 
-        const result = await postTweet(draftText, credentials);
-
-        await logger.log("X Draft Approval - Tweet posted", {
-          tweetId: result.id,
-          reviewer: reviewerUserId,
-        });
-
-        if (messageTs) {
-          await client.chat.update({
-            channel: channelId,
-            ts: messageTs,
-            text: `X投稿完了: ${draftText}`,
-            blocks: [
-              {
-                type: "header",
-                text: {
-                  type: "plain_text",
-                  text: "X投稿ドラフト - 承認済み",
-                },
-              },
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: `*投稿者:* <@${authorUserId}>`,
-                },
-              },
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: `*投稿内容:*\n>>> ${draftText}`,
-                },
-              },
-              {
-                type: "context",
-                elements: [
-                  {
-                    type: "mrkdwn",
-                    text:
-                      `Approved by <@${reviewerUserId}> | Tweet ID: ${result.id}`,
-                  },
-                ],
-              },
-            ],
-          });
+          if (scheduledDateTime.getTime() > now.getTime()) {
+            shouldSchedule = true;
+            scheduledISOString = scheduledDateTime.toISOString();
+          }
         }
 
-        await client.functions.completeSuccess({
-          function_execution_id: executionId,
-          outputs: {
-            status: "approved",
-            tweet_id: result.id,
-          },
-        });
+        if (shouldSchedule) {
+          // 予約投稿: Scheduled Trigger を作成
+          await logger.log("X Draft Approval - Creating scheduled trigger", {
+            scheduledAt: scheduledISOString,
+            reviewer: reviewerUserId,
+          });
+
+          const triggerResult = await client.workflows.triggers.create({
+            type: TriggerTypes.Scheduled,
+            name: "Scheduled X Post",
+            workflow:
+              `#/workflows/${PostScheduledTweetWorkflow.definition.callback_id}`,
+            inputs: {
+              draft_text: { value: draftText },
+              channel_id: { value: channelId },
+              author_user_id: { value: authorUserId },
+              message_ts: { value: messageTs },
+            },
+            schedule: {
+              start_time: scheduledISOString,
+              frequency: { type: "once" },
+            },
+          });
+
+          if (!triggerResult.ok) {
+            throw new Error(
+              `Failed to create scheduled trigger: ${triggerResult.error}`,
+            );
+          }
+
+          await logger.log("X Draft Approval - Scheduled trigger created", {
+            triggerId: triggerResult.trigger?.id,
+            scheduledAt: scheduledISOString,
+          });
+
+          if (messageTs) {
+            await client.chat.update({
+              channel: channelId,
+              ts: messageTs,
+              text: `X投稿予約済み: ${draftText}`,
+              blocks: [
+                {
+                  type: "header",
+                  text: {
+                    type: "plain_text",
+                    text: "X投稿ドラフト - 予約済み",
+                  },
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `*投稿者:* <@${authorUserId}>`,
+                  },
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `*投稿内容:*\n>>> ${draftText}`,
+                  },
+                },
+                {
+                  type: "context",
+                  elements: [
+                    {
+                      type: "mrkdwn",
+                      text:
+                        `Approved by <@${reviewerUserId}> | 予約投稿: ${scheduledDate} ${scheduledTime} (JST)`,
+                    },
+                  ],
+                },
+              ],
+            });
+          }
+
+          await client.functions.completeSuccess({
+            function_execution_id: executionId,
+            outputs: {
+              status: "scheduled",
+              tweet_id: "",
+            },
+          });
+        } else {
+          // 即投稿
+          const credentials = {
+            consumerKey: getEnv(env, "X_CONSUMER_KEY"),
+            consumerSecret: getEnv(env, "X_CONSUMER_SECRET"),
+            accessToken: getEnv(env, "X_ACCESS_TOKEN"),
+            accessTokenSecret: getEnv(env, "X_ACCESS_TOKEN_SECRET"),
+          };
+
+          const result = await postTweet(draftText, credentials);
+
+          await logger.log("X Draft Approval - Tweet posted", {
+            tweetId: result.id,
+            reviewer: reviewerUserId,
+          });
+
+          if (messageTs) {
+            await client.chat.update({
+              channel: channelId,
+              ts: messageTs,
+              text: `X投稿完了: ${draftText}`,
+              blocks: [
+                {
+                  type: "header",
+                  text: {
+                    type: "plain_text",
+                    text: "X投稿ドラフト - 承認済み",
+                  },
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `*投稿者:* <@${authorUserId}>`,
+                  },
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `*投稿内容:*\n>>> ${draftText}`,
+                  },
+                },
+                {
+                  type: "context",
+                  elements: [
+                    {
+                      type: "mrkdwn",
+                      text:
+                        `Approved by <@${reviewerUserId}> | Tweet ID: ${result.id}`,
+                    },
+                  ],
+                },
+              ],
+            });
+          }
+
+          await client.functions.completeSuccess({
+            function_execution_id: executionId,
+            outputs: {
+              status: "approved",
+              tweet_id: result.id,
+            },
+          });
+        }
       } catch (error) {
-        await logger.error("X Draft Approval - Tweet post failed", error);
+        await logger.error("X Draft Approval - Failed", error);
 
         if (messageTs) {
           await client.chat.postMessage({
@@ -242,7 +358,7 @@ export default SlackFunction(
 
         await client.functions.completeError({
           function_execution_id: executionId,
-          error: `Tweet post failed: ${
+          error: `Failed: ${
             error instanceof Error ? error.message : String(error)
           }`,
         });
