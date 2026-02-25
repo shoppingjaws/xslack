@@ -99,6 +99,7 @@ export async function postTweet(
   const body = JSON.stringify({ text });
 
   const authHeader = await buildAuthHeader(method, url, credentials);
+  console.log("[DEBUG] Auth header:", authHeader.substring(0, 120) + "...");
 
   const response = await fetch(url, {
     method,

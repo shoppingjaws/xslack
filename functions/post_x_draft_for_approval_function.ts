@@ -153,12 +153,26 @@ export default SlackFunction(
 
     if (action.action_id === APPROVE_ACTION_ID) {
       try {
-        const result = await postTweet(draftText, {
+        const credentials = {
           consumerKey: getEnv(env, "X_CONSUMER_KEY"),
           consumerSecret: getEnv(env, "X_CONSUMER_SECRET"),
           accessToken: getEnv(env, "X_ACCESS_TOKEN"),
           accessTokenSecret: getEnv(env, "X_ACCESS_TOKEN_SECRET"),
+        };
+
+        // Debug: print directly to terminal (not via Slack logger)
+        console.log("[DEBUG] X credentials:", {
+          consumerKey: credentials.consumerKey.substring(0, 5) + "...",
+          consumerSecret: credentials.consumerSecret.substring(0, 5) +
+            "...",
+          accessToken: credentials.accessToken.substring(0, 5) + "...",
+          accessTokenSecret: credentials.accessTokenSecret.substring(
+            0,
+            5,
+          ) + "...",
         });
+
+        const result = await postTweet(draftText, credentials);
 
         await logger.log("X Draft Approval - Tweet posted", {
           tweetId: result.id,
