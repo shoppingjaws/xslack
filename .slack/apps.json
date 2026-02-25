@@ -1,0 +1,11 @@
+{
+  "apps": {
+    "E0AGM0CL14P": {
+      "app_id": "A0AHFELHNN5",
+      "enterprise_id": "E0AGM0CL14P",
+      "team_domain": "sjaws-sandbox",
+      "team_id": "E0AGM0CL14P"
+    }
+  },
+  "default": "sjaws-sandbox"
+}
