@@ -1,5 +1,7 @@
 # xslack
 
+[日本語](README_ja.md)
+
 X (Twitter) post drafting and approval workflow for Slack.
 
 Draft tweets in Slack, get team approval, and post to X — immediately or on a schedule.
@@ -45,7 +47,7 @@ cp .env.sample .env
 | `X_ACCESS_TOKEN` | X API OAuth 1.0a access token |
 | `X_ACCESS_TOKEN_SECRET` | X API OAuth 1.0a access token secret |
 | `X_PREVENT_SELF_APPROVE` | Set to `true` to prevent authors from approving their own drafts |
-| `X_POSTED_CHANNEL_ID` | *(Optional)* Channel ID to receive post-completion notifications |
+| `X_POSTED_CHANNEL_ID` | Channel ID to receive post-completion notifications |
 
 ### 3. Deploy to Slack
 

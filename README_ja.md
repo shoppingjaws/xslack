@@ -43,7 +43,7 @@ cp .env.sample .env
 | `X_ACCESS_TOKEN` | X API OAuth 1.0a アクセストークン |
 | `X_ACCESS_TOKEN_SECRET` | X API OAuth 1.0a アクセストークンシークレット |
 | `X_PREVENT_SELF_APPROVE` | `true` にすると投稿者自身の承認を禁止 |
-| `X_POSTED_CHANNEL_ID` | *（任意）* 投稿完了通知を送信するチャンネルID |
+| `X_POSTED_CHANNEL_ID` | 投稿完了通知を送信するチャンネルID |
 
 ### 3. Slackへのデプロイ
 
