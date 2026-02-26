@@ -311,6 +311,20 @@ export default SlackFunction(
         image_file_ids: imageFileIds,
       } = approvalData;
 
+      // 投稿者自身による承認を禁止（環境変数で制御）
+      if (
+        action.action_id === APPROVE_ACTION_ID &&
+        getEnv(env, "X_PREVENT_SELF_APPROVE") === "true" &&
+        reviewerUserId === authorUserId
+      ) {
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: reviewerUserId,
+          text: "自分が作成したドラフトを自分で承認することはできません。他のメンバーに承認を依頼してください。",
+        });
+        return;
+      }
+
       if (action.action_id === APPROVE_ACTION_ID) {
         try {
           // 予約日時の判定
