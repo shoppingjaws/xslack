@@ -9,6 +9,7 @@ import {
   parseFileIds,
 } from "./libs/slack_file_downloader.ts";
 import { uploadMultipleMedia } from "./libs/x_media_upload.ts";
+import { countXCharacters } from "./libs/x_char_count.ts";
 import PostScheduledTweetWorkflow from "../workflows/post_scheduled_tweet_workflow.ts";
 
 const APPROVE_ACTION_ID = "x_draft_approve";
@@ -83,7 +84,6 @@ export default SlackFunction(
               type: "plain_text_input",
               action_id: "draft_text",
               multiline: true,
-              max_length: 280,
               placeholder: {
                 type: "plain_text",
                 text: "Xに投稿するテキスト（280文字以内）",
@@ -169,11 +169,11 @@ export default SlackFunction(
 
       await logger.log("X Draft Approval - Form submitted", {
         author: authorUserId,
-        charCount: draftText.length,
+        charCount: countXCharacters(draftText),
         imageCount,
       });
 
-      const charCount = draftText.length;
+      const charCount = countXCharacters(draftText);
       const charStatus = charCount <= 280
         ? `${charCount}/280`
         : `${charCount}/280 (over limit!)`;
