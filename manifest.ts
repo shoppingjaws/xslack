@@ -20,12 +20,13 @@ export default Manifest({
     PostScheduledTweetFunctionDefinition,
     ListScheduledTweetsFunctionDefinition,
   ],
-  outgoingDomains: ["api.x.com"],
+  outgoingDomains: ["api.x.com", "upload.twitter.com", "files.slack.com"],
   botScopes: [
     "commands",
     "chat:write",
     "chat:write.public",
     "triggers:read",
     "triggers:write",
+    "files:read",
   ],
 });

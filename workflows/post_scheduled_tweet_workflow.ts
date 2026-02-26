@@ -19,6 +19,9 @@ const PostScheduledTweetWorkflow = DefineWorkflow({
       message_ts: {
         type: Schema.types.string,
       },
+      image_file_ids: {
+        type: Schema.types.string,
+      },
     },
     required: ["draft_text", "channel_id", "author_user_id", "message_ts"],
   },
@@ -29,6 +32,7 @@ PostScheduledTweetWorkflow.addStep(PostScheduledTweetFunctionDefinition, {
   channel_id: PostScheduledTweetWorkflow.inputs.channel_id,
   author_user_id: PostScheduledTweetWorkflow.inputs.author_user_id,
   message_ts: PostScheduledTweetWorkflow.inputs.message_ts,
+  image_file_ids: PostScheduledTweetWorkflow.inputs.image_file_ids,
 });
 
 export default PostScheduledTweetWorkflow;

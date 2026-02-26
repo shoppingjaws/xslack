@@ -2,6 +2,12 @@ import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
 import { SlackAPI } from "deno-slack-api/mod.ts";
 import { createSlackLogger } from "./libs/logger.ts";
 import { postTweet } from "./libs/x_api_client.ts";
+import {
+  downloadSlackFile,
+  getSlackFileInfos,
+  parseFileIds,
+} from "./libs/slack_file_downloader.ts";
+import { uploadMultipleMedia } from "./libs/x_media_upload.ts";
 
 // deno-lint-ignore no-explicit-any
 function getEnv(env: Record<string, any>, key: string): string {
@@ -30,6 +36,10 @@ export const PostScheduledTweetFunctionDefinition = DefineFunction({
       message_ts: {
         type: Schema.types.string,
         description: "Timestamp of the approval message for thread replies",
+      },
+      image_file_ids: {
+        type: Schema.types.string,
+        description: "Comma-separated Slack file IDs for images (max 4)",
       },
     },
     required: ["draft_text", "channel_id", "author_user_id", "message_ts"],
@@ -64,7 +74,25 @@ export default SlackFunction(
         accessTokenSecret: getEnv(env, "X_ACCESS_TOKEN_SECRET"),
       };
 
-      const result = await postTweet(inputs.draft_text, credentials);
+      // 画像処理
+      let mediaIds: string[] | undefined;
+      if (inputs.image_file_ids) {
+        const fileIds = parseFileIds(inputs.image_file_ids);
+        if (fileIds.length > 0) {
+          const fileInfos = await getSlackFileInfos(fileIds, client);
+          const images: { data: Uint8Array; mimetype: string }[] = [];
+          for (const fileInfo of fileInfos) {
+            const data = await downloadSlackFile(
+              fileInfo.urlPrivateDownload,
+              token,
+            );
+            images.push({ data, mimetype: fileInfo.mimetype });
+          }
+          mediaIds = await uploadMultipleMedia(images, credentials);
+        }
+      }
+
+      const result = await postTweet(inputs.draft_text, credentials, mediaIds);
 
       await logger.log("Scheduled tweet posted", {
         tweetId: result.id,

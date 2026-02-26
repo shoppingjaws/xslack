@@ -1,8 +1,16 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
 import { SlackAPI } from "deno-slack-api/mod.ts";
 import { createSlackLogger } from "./libs/logger.ts";
+import { postTweet } from "./libs/x_api_client.ts";
+import {
+  downloadSlackFile,
+  getSlackFileInfos,
+  parseFileIds,
+} from "./libs/slack_file_downloader.ts";
+import { uploadMultipleMedia } from "./libs/x_media_upload.ts";
 
 const CANCEL_ACTION_ID = "cancel_scheduled_tweet";
+const POST_NOW_ACTION_ID = "post_now_scheduled_tweet";
 
 // deno-lint-ignore no-explicit-any
 function getEnv(env: Record<string, any>, key: string): string {
@@ -106,6 +114,29 @@ function buildListBlocks(triggers: any[]): any[] {
         elements: [
           {
             type: "button",
+            action_id: POST_NOW_ACTION_ID,
+            text: { type: "plain_text", text: "今すぐ投稿" },
+            style: "primary",
+            value: JSON.stringify({
+              trigger_id: trigger.id,
+              draft_text: trigger.inputs?.draft_text?.value,
+              channel_id: trigger.inputs?.channel_id?.value,
+              author_user_id: trigger.inputs?.author_user_id?.value,
+              message_ts: trigger.inputs?.message_ts?.value,
+              image_file_ids: trigger.inputs?.image_file_ids?.value ?? "",
+            }),
+            confirm: {
+              title: { type: "plain_text", text: "確認" },
+              text: {
+                type: "plain_text",
+                text: "この投稿を今すぐXに投稿しますか？",
+              },
+              confirm: { type: "plain_text", text: "投稿する" },
+              deny: { type: "plain_text", text: "やめる" },
+            },
+          },
+          {
+            type: "button",
             action_id: CANCEL_ACTION_ID,
             text: { type: "plain_text", text: "キャンセル" },
             style: "danger",
@@ -196,7 +227,8 @@ export default SlackFunction(
     const executionId = body.function_data.execution_id;
     const triggerId = action.value;
     const messageTs = body.message?.ts;
-    const channelId = body.message?.channel_id ??
+    // deno-lint-ignore no-explicit-any
+    const channelId = (body.message as any)?.channel_id ??
       getEnv(env, "X_APPROVAL_CHANNEL_ID");
 
     try {
@@ -281,6 +313,149 @@ export default SlackFunction(
           text: `キャンセル処理中にエラーが発生しました: ${
             error instanceof Error ? error.message : String(error)
           }`,
+        });
+      }
+    }
+  },
+).addBlockActionsHandler(
+  [POST_NOW_ACTION_ID],
+  async ({ action, body, env, token }) => {
+    const logger = createSlackLogger(token);
+    const client = SlackAPI(token);
+
+    const executionId = body.function_data.execution_id;
+    const listMessageTs = body.message?.ts;
+    // deno-lint-ignore no-explicit-any
+    const listChannelId = (body.message as any)?.channel_id ??
+      getEnv(env, "X_APPROVAL_CHANNEL_ID");
+
+    let triggerData: {
+      trigger_id: string;
+      draft_text: string;
+      channel_id: string;
+      author_user_id: string;
+      message_ts: string;
+      image_file_ids: string;
+    };
+
+    try {
+      triggerData = JSON.parse(action.value);
+    } catch {
+      await logger.error("Failed to parse post_now action value", {
+        value: action.value,
+      });
+      return;
+    }
+
+    try {
+      const credentials = {
+        consumerKey: getEnv(env, "X_CONSUMER_KEY"),
+        consumerSecret: getEnv(env, "X_CONSUMER_SECRET"),
+        accessToken: getEnv(env, "X_ACCESS_TOKEN"),
+        accessTokenSecret: getEnv(env, "X_ACCESS_TOKEN_SECRET"),
+      };
+
+      // 画像処理
+      let mediaIds: string[] | undefined;
+      if (triggerData.image_file_ids) {
+        const fileIds = parseFileIds(triggerData.image_file_ids);
+        if (fileIds.length > 0) {
+          const fileInfos = await getSlackFileInfos(fileIds, client);
+          const images: { data: Uint8Array; mimetype: string }[] = [];
+          for (const fileInfo of fileInfos) {
+            const data = await downloadSlackFile(
+              fileInfo.urlPrivateDownload,
+              token,
+            );
+            images.push({ data, mimetype: fileInfo.mimetype });
+          }
+          mediaIds = await uploadMultipleMedia(images, credentials);
+        }
+      }
+
+      const result = await postTweet(
+        triggerData.draft_text,
+        credentials,
+        mediaIds,
+      );
+
+      await logger.log("Post now tweet posted", {
+        tweetId: result.id,
+        author: triggerData.author_user_id,
+      });
+
+      // スケジュールトリガーを削除
+      await client.workflows.triggers.delete({
+        trigger_id: triggerData.trigger_id,
+      });
+
+      // 元の承認メッセージスレッドに投稿完了通知
+      if (triggerData.channel_id && triggerData.message_ts) {
+        await client.chat.postMessage({
+          channel: triggerData.channel_id,
+          thread_ts: triggerData.message_ts,
+          text:
+            `今すぐ投稿されました。\nTweet ID: ${result.id}\nhttps://x.com/i/status/${result.id}`,
+        });
+      }
+
+      // 一覧メッセージを更新
+      const listResult = await client.workflows.triggers.list({
+        is_owner: true,
+      });
+      const remainingTriggers = filterScheduledTweetTriggers(
+        listResult.triggers ?? [],
+      );
+
+      if (remainingTriggers.length === 0) {
+        if (listMessageTs) {
+          await client.chat.update({
+            channel: listChannelId,
+            ts: listMessageTs,
+            text: "予約投稿はすべて処理されました。",
+            blocks: [
+              {
+                type: "header",
+                text: {
+                  type: "plain_text",
+                  text: "予約投稿一覧",
+                },
+              },
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: "予約投稿はすべて処理されました。",
+                },
+              },
+            ],
+          });
+        }
+
+        await client.functions.completeSuccess({
+          function_execution_id: executionId,
+          outputs: {},
+        });
+      } else {
+        const blocks = buildListBlocks(remainingTriggers);
+
+        if (listMessageTs) {
+          await client.chat.update({
+            channel: listChannelId,
+            ts: listMessageTs,
+            text: `予約投稿一覧（${remainingTriggers.length}件）- 1件投稿しました`,
+            blocks,
+          });
+        }
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      await logger.error("Post now failed", error);
+      if (listMessageTs) {
+        await client.chat.postMessage({
+          channel: listChannelId,
+          thread_ts: listMessageTs,
+          text: `今すぐ投稿に失敗しました: ${errorMsg}`,
         });
       }
     }

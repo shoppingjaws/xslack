@@ -41,7 +41,7 @@ async function hmacSha1(key: string, data: string): Promise<string> {
   return btoa(String.fromCharCode(...new Uint8Array(sig)));
 }
 
-async function buildAuthHeader(
+export async function buildAuthHeader(
   method: string,
   url: string,
   credentials: XCredentials,
@@ -93,10 +93,16 @@ async function buildAuthHeader(
 export async function postTweet(
   text: string,
   credentials: XCredentials,
+  mediaIds?: string[],
 ): Promise<PostTweetResult> {
   const url = "https://api.x.com/2/tweets";
   const method = "POST";
-  const body = JSON.stringify({ text });
+  // deno-lint-ignore no-explicit-any
+  const payload: Record<string, any> = { text };
+  if (mediaIds && mediaIds.length > 0) {
+    payload.media = { media_ids: mediaIds };
+  }
+  const body = JSON.stringify(payload);
 
   const authHeader = await buildAuthHeader(method, url, credentials);
   console.log("[DEBUG] Auth header:", authHeader.substring(0, 120) + "...");
