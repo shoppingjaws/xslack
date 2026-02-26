@@ -465,6 +465,16 @@ export default SlackFunction(
               reviewer: reviewerUserId,
             });
 
+            // postedチャンネルに投稿通知
+            const postedChannelId = getEnv(env, "X_POSTED_CHANNEL_ID");
+            if (postedChannelId) {
+              await client.chat.postMessage({
+                channel: postedChannelId,
+                text:
+                  `X投稿が完了しました。\n*投稿者:* <@${authorUserId}>\n*投稿内容:*\n>>> ${draftText}\nhttps://x.com/i/status/${result.id}`,
+              });
+            }
+
             if (messageTs) {
               await client.chat.update({
                 channel: channelId,
