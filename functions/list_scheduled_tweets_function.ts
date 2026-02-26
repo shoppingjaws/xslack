@@ -77,6 +77,8 @@ function buildListBlocks(triggers: any[]): any[] {
   for (const trigger of triggers) {
     const draftText = trigger.inputs?.draft_text?.value ?? "(内容不明)";
     const authorUserId = trigger.inputs?.author_user_id?.value;
+    const approvalChannelId = trigger.inputs?.channel_id?.value;
+    const approvalMessageTs = trigger.inputs?.message_ts?.value;
     const scheduledAt = trigger.schedule?.start_time;
 
     let scheduleDisplay = "不明";
@@ -92,6 +94,13 @@ function buildListBlocks(triggers: any[]): any[] {
       });
     }
 
+    let approvalLink = "";
+    if (approvalChannelId && approvalMessageTs) {
+      const tsForUrl = approvalMessageTs.replace(".", "");
+      approvalLink =
+        ` | <https://slack.com/archives/${approvalChannelId}/p${tsForUrl}|承認メッセージ>`;
+    }
+
     blocks.push(
       {
         type: "section",
@@ -105,7 +114,7 @@ function buildListBlocks(triggers: any[]): any[] {
         elements: [
           {
             type: "mrkdwn",
-            text: `投稿者: ${authorUserId ? `<@${authorUserId}>` : "不明"} | 予約日時: ${scheduleDisplay} (JST)`,
+            text: `投稿者: ${authorUserId ? `<@${authorUserId}>` : "不明"} | 予約日時: ${scheduleDisplay} (JST)${approvalLink}`,
           },
         ],
       },
@@ -209,6 +218,7 @@ export default SlackFunction(
         channel: channelId,
         text: `予約投稿一覧（${scheduledTriggers.length}件）`,
         blocks,
+        unfurl_links: false,
       });
 
       return { completed: false };
@@ -301,6 +311,7 @@ export default SlackFunction(
             ts: messageTs,
             text: `予約投稿一覧（${remainingTriggers.length}件）- 1件キャンセルしました`,
             blocks,
+            unfurl_links: false,
           });
         }
       }
@@ -445,6 +456,7 @@ export default SlackFunction(
             ts: listMessageTs,
             text: `予約投稿一覧（${remainingTriggers.length}件）- 1件投稿しました`,
             blocks,
+            unfurl_links: false,
           });
         }
       }
