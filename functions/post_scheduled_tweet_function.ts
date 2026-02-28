@@ -9,9 +9,8 @@ import {
 } from "./libs/slack_file_downloader.ts";
 import { uploadMultipleMedia } from "./libs/x_media_upload.ts";
 
-// deno-lint-ignore no-explicit-any
-function getEnv(env: Record<string, any>, key: string): string {
-  return Deno.env.get(key) ?? env[key] ?? "";
+function getEnv(env: Record<string, string>, key: string): string {
+  return env[key] ?? "";
 }
 
 export const PostScheduledTweetFunctionDefinition = DefineFunction({

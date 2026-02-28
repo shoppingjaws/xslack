@@ -12,9 +12,8 @@ import { uploadMultipleMedia } from "./libs/x_media_upload.ts";
 const CANCEL_ACTION_ID = "cancel_scheduled_tweet";
 const POST_NOW_ACTION_ID = "post_now_scheduled_tweet";
 
-// deno-lint-ignore no-explicit-any
-function getEnv(env: Record<string, any>, key: string): string {
-  return Deno.env.get(key) ?? env[key] ?? "";
+function getEnv(env: Record<string, string>, key: string): string {
+  return env[key] ?? "";
 }
 
 export const ListScheduledTweetsFunctionDefinition = DefineFunction({

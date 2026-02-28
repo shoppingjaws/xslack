@@ -23,12 +23,8 @@ interface ApprovalData {
   image_file_ids: string;
 }
 
-/**
- * Read env var: prefer OS env (set by `op run`) over SDK `env` param (raw .env text).
- */
-// deno-lint-ignore no-explicit-any
-function getEnv(env: Record<string, any>, key: string): string {
-  return Deno.env.get(key) ?? env[key] ?? "";
+function getEnv(env: Record<string, string>, key: string): string {
+  return env[key] ?? "";
 }
 
 export const PostXDraftForApprovalFunctionDefinition = DefineFunction({
