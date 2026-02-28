@@ -11,7 +11,7 @@ import { PendingApprovalsDatastore } from "./datastores/pending_approvals.ts";
 export default Manifest({
   name: "xslack",
   description: "X (Twitter) post drafting and approval workflow for Slack",
-  icon: "assets/icon.png",
+  icon: "assets/x.jpg",
   workflows: [
     XDraftApprovalWorkflow,
     PostScheduledTweetWorkflow,
