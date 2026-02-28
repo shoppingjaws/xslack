@@ -108,11 +108,17 @@ export default SlackFunction(
       // postedチャンネルに投稿通知
       const postedChannelId = getEnv(env, "X_POSTED_CHANNEL_ID");
       if (postedChannelId) {
-        await client.chat.postMessage({
+        const postedResult = await client.chat.postMessage({
           channel: postedChannelId,
           text:
             `X投稿が完了しました。\n*投稿者:* <@${inputs.author_user_id}>\n*投稿内容:*\n>>> ${inputs.draft_text}\nhttps://x.com/i/status/${result.id}`,
         });
+        if (!postedResult.ok) {
+          await logger.error(
+            "Failed to post to posted channel (scheduled)",
+            postedResult.error,
+          );
+        }
       }
 
       return {

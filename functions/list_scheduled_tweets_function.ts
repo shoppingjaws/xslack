@@ -629,14 +629,20 @@ export default SlackFunction(
         author: triggerData.author_user_id,
       });
 
-      // 元の承認メッセージスレッドに投稿完了通知
-      if (triggerData.channel_id && triggerData.message_ts) {
-        await client.chat.postMessage({
-          channel: triggerData.channel_id,
-          thread_ts: triggerData.message_ts,
+      // postedチャンネルに投稿通知
+      const postedChannelId = getEnv(env, "X_POSTED_CHANNEL_ID");
+      if (postedChannelId) {
+        const postedResult = await client.chat.postMessage({
+          channel: postedChannelId,
           text:
-            `今すぐ投稿されました。\nTweet ID: ${tweetResult.id}\nhttps://x.com/i/status/${tweetResult.id}`,
+            `X投稿が完了しました。\n*投稿者:* <@${triggerData.author_user_id}>\n*投稿内容:*\n>>> ${triggerData.draft_text}\nhttps://x.com/i/status/${tweetResult.id}`,
         });
+        if (!postedResult.ok) {
+          await logger.error(
+            "Failed to post to posted channel (post now)",
+            postedResult.error,
+          );
+        }
       }
 
       // 全リストメッセージを更新
