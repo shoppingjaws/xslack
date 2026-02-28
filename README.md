@@ -85,6 +85,24 @@ slack trigger create --trigger-def triggers/x_draft_approval_trigger.ts
 slack trigger create --trigger-def triggers/list_scheduled_tweets_trigger.ts
 ```
 
+### 6. Restrict trigger access (recommended)
+
+By default, triggers are accessible to everyone in the workspace. Since this app can post to X on behalf of your account, it is strongly recommended to restrict access to authorized users only:
+
+```sh
+# Grant access to specific users
+slack trigger access --trigger-id <trigger_id> --grant --users <user_id1>,<user_id2>
+
+# Or grant access to specific channels
+slack trigger access --trigger-id <trigger_id> --grant --channels <channel_id>
+
+# Revoke access from everyone (then grant to specific users)
+slack trigger access --trigger-id <trigger_id> --revoke --everyone
+slack trigger access --trigger-id <trigger_id> --grant --users <user_id>
+```
+
+You can find the trigger ID from the output of `slack trigger create` or by running `slack trigger list`.
+
 ## Usage
 
 1. Open the approval channel in Slack

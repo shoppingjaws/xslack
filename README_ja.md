@@ -81,6 +81,24 @@ slack trigger create --trigger-def triggers/x_draft_approval_trigger.ts
 slack trigger create --trigger-def triggers/list_scheduled_tweets_trigger.ts
 ```
 
+### 6. トリガーのアクセス制限（推奨）
+
+デフォルトではトリガーはワークスペース全員がアクセスできます。このアプリはXアカウントに代わって投稿を行うため、許可されたユーザーのみに実行権限を制限することを強く推奨します：
+
+```sh
+# 特定のユーザーにアクセスを付与
+slack trigger access --trigger-id <trigger_id> --grant --users <user_id1>,<user_id2>
+
+# 特定のチャンネルにアクセスを付与
+slack trigger access --trigger-id <trigger_id> --grant --channels <channel_id>
+
+# 全員のアクセスを取り消してから、特定のユーザーに付与
+slack trigger access --trigger-id <trigger_id> --revoke --everyone
+slack trigger access --trigger-id <trigger_id> --grant --users <user_id>
+```
+
+トリガーIDは `slack trigger create` の出力、または `slack trigger list` で確認できます。
+
 ## 使い方
 
 1. Slackで承認チャンネルを開く
