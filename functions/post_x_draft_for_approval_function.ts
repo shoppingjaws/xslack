@@ -270,6 +270,7 @@ export default SlackFunction(
       // Datastoreに未承認ドラフトを保存
       if (postResult.ok && postResult.ts) {
         const id = `${approvalChannelId}_${postResult.ts}`;
+        const functionExecutionId = body.function_data?.execution_id ?? "";
         await client.apps.datastore.put({
           datastore: PendingApprovalsDatastore.name,
           item: {
@@ -281,6 +282,7 @@ export default SlackFunction(
             scheduled_date: scheduledDate,
             scheduled_time: scheduledTime,
             image_file_ids: imageFileIds,
+            function_execution_id: functionExecutionId,
             created_at: Date.now(),
           },
         });

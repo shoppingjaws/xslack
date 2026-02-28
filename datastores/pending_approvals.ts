@@ -28,6 +28,9 @@ export const PendingApprovalsDatastore = DefineDatastore({
     image_file_ids: {
       type: Schema.types.string,
     },
+    function_execution_id: {
+      type: Schema.types.string,
+    },
     created_at: {
       type: Schema.types.number,
     },

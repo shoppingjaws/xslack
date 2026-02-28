@@ -1,5 +1,5 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
-import { SlackAPI } from "deno-slack-api/mod.ts";
+import { SlackAPI, TriggerTypes } from "deno-slack-api/mod.ts";
 import { createSlackLogger } from "./libs/logger.ts";
 import { postTweet } from "./libs/x_api_client.ts";
 import {
@@ -10,9 +10,11 @@ import {
 import { uploadMultipleMedia } from "./libs/x_media_upload.ts";
 import { ActiveListMessagesDatastore } from "../datastores/active_list_messages.ts";
 import { PendingApprovalsDatastore } from "../datastores/pending_approvals.ts";
+import PostScheduledTweetWorkflow from "../workflows/post_scheduled_tweet_workflow.ts";
 
 const CANCEL_ACTION_ID = "cancel_scheduled_tweet";
 const POST_NOW_ACTION_ID = "post_now_scheduled_tweet";
+const APPROVE_FROM_LIST_ACTION_ID = "approve_from_list";
 const TTL_HOURS = 24;
 
 function getEnv(env: Record<string, string>, key: string): string {
@@ -112,6 +114,27 @@ function buildPendingApprovalBlocks(pendingApprovals: any[]): any[] {
           {
             type: "mrkdwn",
             text: `投稿者: ${authorUserId ? `<@${authorUserId}>` : "不明"} | ${scheduleText}${approvalLink}`,
+          },
+        ],
+      },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            action_id: APPROVE_FROM_LIST_ACTION_ID,
+            text: { type: "plain_text", text: "承認" },
+            style: "primary",
+            value: approval.id,
+            confirm: {
+              title: { type: "plain_text", text: "確認" },
+              text: {
+                type: "plain_text",
+                text: "この投稿を承認しますか？",
+              },
+              confirm: { type: "plain_text", text: "承認する" },
+              deny: { type: "plain_text", text: "やめる" },
+            },
           },
         ],
       },
@@ -282,7 +305,7 @@ async function updateAllListMessages(client: any, logger: any) {
     await logger.error("Failed to query active list messages", {
       error: queryResult.error,
     });
-    return { remainingTriggers };
+    return { remainingTriggers, pendingApprovals };
   }
 
   const entries = queryResult.items ?? [];
@@ -349,7 +372,7 @@ async function updateAllListMessages(client: any, logger: any) {
     }
   }
 
-  return { remainingTriggers };
+  return { remainingTriggers, pendingApprovals };
 }
 
 export default SlackFunction(
@@ -420,12 +443,11 @@ export default SlackFunction(
         });
       }
 
-      // 予約投稿がある場合はアクションハンドラのために未完了にする
-      if (scheduledTriggers.length > 0) {
+      // 予約投稿または承認待ちがある場合はアクションハンドラのために未完了にする
+      if (scheduledTriggers.length > 0 || pendingApprovals.length > 0) {
         return { completed: false };
       }
 
-      // 承認待ちのみの場合はアクションボタンがないので完了
       return { outputs: {} };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -471,13 +493,13 @@ export default SlackFunction(
       await logger.log("Scheduled tweet cancelled", { triggerId });
 
       // 全リストメッセージを更新
-      const { remainingTriggers } = await updateAllListMessages(
-        client,
-        logger,
-      );
+      const { remainingTriggers, pendingApprovals } =
+        await updateAllListMessages(client, logger);
 
-      // トリガーが0件なら自身のfunction executionを完了
-      if (remainingTriggers.length === 0) {
+      // 残りが0件なら自身のfunction executionを完了
+      if (
+        remainingTriggers.length === 0 && pendingApprovals.length === 0
+      ) {
         await client.functions.completeSuccess({
           function_execution_id: executionId,
           outputs: {},
@@ -618,13 +640,13 @@ export default SlackFunction(
       }
 
       // 全リストメッセージを更新
-      const { remainingTriggers } = await updateAllListMessages(
-        client,
-        logger,
-      );
+      const { remainingTriggers, pendingApprovals } =
+        await updateAllListMessages(client, logger);
 
-      // トリガーが0件なら自身のfunction executionを完了
-      if (remainingTriggers.length === 0) {
+      // 残りが0件なら自身のfunction executionを完了
+      if (
+        remainingTriggers.length === 0 && pendingApprovals.length === 0
+      ) {
         await client.functions.completeSuccess({
           function_execution_id: executionId,
           outputs: {},
@@ -638,6 +660,288 @@ export default SlackFunction(
           channel: listChannelId,
           thread_ts: listMessageTs,
           text: `今すぐ投稿に失敗しました: ${errorMsg}`,
+        });
+      }
+    }
+  },
+).addBlockActionsHandler(
+  [APPROVE_FROM_LIST_ACTION_ID],
+  async ({ action, body, env, token }) => {
+    const logger = createSlackLogger(token);
+    const client = SlackAPI(token);
+
+    const executionId = body.function_data.execution_id;
+    const reviewerUserId = body.user.id;
+    const listMessageTs = body.message?.ts;
+    // deno-lint-ignore no-explicit-any
+    const listChannelId = (body.message as any)?.channel_id ??
+      getEnv(env, "X_APPROVAL_CHANNEL_ID");
+
+    const pendingId = action.value;
+
+    try {
+      // Datastoreから承認待ちエントリを取得
+      const getResult = await client.apps.datastore.get({
+        datastore: PendingApprovalsDatastore.name,
+        id: pendingId,
+      });
+
+      if (!getResult.ok || !getResult.item) {
+        // 既に処理済み
+        await updateAllListMessages(client, logger);
+        if (listMessageTs) {
+          await client.chat.postMessage({
+            channel: listChannelId,
+            thread_ts: listMessageTs,
+            text: "この投稿は既に処理済みです。",
+          });
+        }
+        return;
+      }
+
+      const approval = getResult.item;
+      const draftText = approval.draft_text ?? "";
+      const authorUserId = approval.author_user_id ?? "";
+      const scheduledDate = approval.scheduled_date ?? "";
+      const scheduledTime = approval.scheduled_time ?? "";
+      const imageFileIds = approval.image_file_ids ?? "";
+      const approvalChannelId = approval.channel_id ?? "";
+      const approvalMessageTs = approval.message_ts ?? "";
+      const originalExecutionId = approval.function_execution_id ?? "";
+
+      // 自己承認防止チェック
+      if (
+        getEnv(env, "X_PREVENT_SELF_APPROVE") === "true" &&
+        reviewerUserId === authorUserId
+      ) {
+        await client.chat.postEphemeral({
+          channel: listChannelId,
+          user: reviewerUserId,
+          text: "自分が作成したドラフトを自分で承認することはできません。他のメンバーに承認を依頼してください。",
+        });
+        return;
+      }
+
+      // Datastoreから承認待ちエントリを削除
+      await client.apps.datastore.delete({
+        datastore: PendingApprovalsDatastore.name,
+        id: pendingId,
+      });
+
+      // 予約日時の判定
+      let shouldSchedule = false;
+      let scheduledISOString = "";
+
+      if (scheduledDate && scheduledTime) {
+        const scheduledDateTime = new Date(
+          `${scheduledDate}T${scheduledTime}:00+09:00`,
+        );
+        const now = new Date();
+        if (scheduledDateTime.getTime() > now.getTime()) {
+          shouldSchedule = true;
+          scheduledISOString = scheduledDateTime.toISOString();
+        }
+      }
+
+      let postedTweetId = "";
+
+      if (shouldSchedule) {
+        // 予約投稿: Scheduled Trigger を作成
+        const triggerResult = await client.workflows.triggers.create({
+          type: TriggerTypes.Scheduled,
+          name: "Scheduled X Post",
+          workflow:
+            `#/workflows/${PostScheduledTweetWorkflow.definition.callback_id}`,
+          inputs: {
+            draft_text: { value: draftText },
+            channel_id: { value: approvalChannelId },
+            author_user_id: { value: authorUserId },
+            message_ts: { value: approvalMessageTs },
+            image_file_ids: { value: imageFileIds },
+          },
+          schedule: {
+            start_time: scheduledISOString,
+            frequency: { type: "once" },
+          },
+        });
+
+        if (!triggerResult.ok) {
+          throw new Error(
+            `Failed to create scheduled trigger: ${triggerResult.error}`,
+          );
+        }
+
+        await logger.log("Approved from list - Scheduled trigger created", {
+          triggerId: triggerResult.trigger?.id,
+          scheduledAt: scheduledISOString,
+          reviewer: reviewerUserId,
+        });
+
+        // 元の承認メッセージを更新
+        if (approvalChannelId && approvalMessageTs) {
+          await client.chat.update({
+            channel: approvalChannelId,
+            ts: approvalMessageTs,
+            text: `X投稿予約済み: ${draftText}`,
+            blocks: [
+              {
+                type: "header",
+                text: {
+                  type: "plain_text",
+                  text: "X投稿ドラフト - 予約済み",
+                },
+              },
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*投稿者:* <@${authorUserId}>`,
+                },
+              },
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*投稿内容:*\n>>> ${draftText}`,
+                },
+              },
+              {
+                type: "context",
+                elements: [
+                  {
+                    type: "mrkdwn",
+                    text:
+                      `Approved by <@${reviewerUserId}> (一覧から承認) | 予約投稿: ${scheduledDate} ${scheduledTime} (JST)`,
+                  },
+                ],
+              },
+            ],
+          });
+        }
+      } else {
+        // 即投稿
+        const credentials = {
+          consumerKey: getEnv(env, "X_CONSUMER_KEY"),
+          consumerSecret: getEnv(env, "X_CONSUMER_SECRET"),
+          accessToken: getEnv(env, "X_ACCESS_TOKEN"),
+          accessTokenSecret: getEnv(env, "X_ACCESS_TOKEN_SECRET"),
+        };
+
+        // 画像処理
+        let mediaIds: string[] | undefined;
+        if (imageFileIds) {
+          const fileIds = parseFileIds(imageFileIds);
+          if (fileIds.length > 0) {
+            const fileInfos = await getSlackFileInfos(fileIds, client);
+            const images: { data: Uint8Array; mimetype: string }[] = [];
+            for (const fileInfo of fileInfos) {
+              const data = await downloadSlackFile(
+                fileInfo.urlPrivateDownload,
+                token,
+              );
+              images.push({ data, mimetype: fileInfo.mimetype });
+            }
+            mediaIds = await uploadMultipleMedia(images, credentials);
+          }
+        }
+
+        const tweetResult = await postTweet(draftText, credentials, mediaIds);
+        postedTweetId = tweetResult.id;
+
+        await logger.log("Approved from list - Tweet posted", {
+          tweetId: tweetResult.id,
+          reviewer: reviewerUserId,
+        });
+
+        // postedチャンネルに投稿通知
+        const postedChannelId = getEnv(env, "X_POSTED_CHANNEL_ID");
+        if (postedChannelId) {
+          await client.chat.postMessage({
+            channel: postedChannelId,
+            text:
+              `X投稿が完了しました。\n*投稿者:* <@${authorUserId}>\n*投稿内容:*\n>>> ${draftText}\nhttps://x.com/i/status/${tweetResult.id}`,
+          });
+        }
+
+        // 元の承認メッセージを更新
+        if (approvalChannelId && approvalMessageTs) {
+          await client.chat.update({
+            channel: approvalChannelId,
+            ts: approvalMessageTs,
+            text: `X投稿完了: ${draftText}`,
+            blocks: [
+              {
+                type: "header",
+                text: {
+                  type: "plain_text",
+                  text: "X投稿ドラフト - 承認済み",
+                },
+              },
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*投稿者:* <@${authorUserId}>`,
+                },
+              },
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*投稿内容:*\n>>> ${draftText}`,
+                },
+              },
+              {
+                type: "context",
+                elements: [
+                  {
+                    type: "mrkdwn",
+                    text:
+                      `Approved by <@${reviewerUserId}> (一覧から承認) | Tweet ID: ${tweetResult.id}`,
+                  },
+                ],
+              },
+            ],
+          });
+        }
+      }
+
+      // 元のドラフト承認関数のexecutionを完了（可能であれば）
+      if (originalExecutionId) {
+        try {
+          await client.functions.completeSuccess({
+            function_execution_id: originalExecutionId,
+            outputs: {
+              status: shouldSchedule ? "scheduled" : "approved",
+              tweet_id: postedTweetId,
+            },
+          });
+        } catch {
+          // タイムアウト済みなど - 無視
+        }
+      }
+
+      // 全リストメッセージを更新
+      const { remainingTriggers, pendingApprovals } =
+        await updateAllListMessages(client, logger);
+
+      // 残りが0件なら自身のfunction executionを完了
+      if (
+        remainingTriggers.length === 0 && pendingApprovals.length === 0
+      ) {
+        await client.functions.completeSuccess({
+          function_execution_id: executionId,
+          outputs: {},
+        });
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      await logger.error("Approve from list failed", error);
+      if (listMessageTs) {
+        await client.chat.postMessage({
+          channel: listChannelId,
+          thread_ts: listMessageTs,
+          text: `承認処理に失敗しました: ${errorMsg}`,
         });
       }
     }
