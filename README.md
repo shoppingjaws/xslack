@@ -49,13 +49,34 @@ cp .env.sample .env
 | `X_PREVENT_SELF_APPROVE` | Set to `true` to prevent authors from approving their own drafts |
 | `X_POSTED_CHANNEL_ID` | Channel ID to receive post-completion notifications |
 
-### 3. Deploy to Slack
+### 3. Add environment variables to Slack
+
+Add all environment variables to Slack at once:
+
+```sh
+deno task env:add .env
+```
+
+To specify an app ID:
+
+```sh
+deno task env:add -a <app_id> .env
+```
+
+If you manage secrets with [1Password CLI](https://developer.1password.com/docs/cli/), you can resolve `op://` references on the fly:
+
+```sh
+op inject -i .env | deno task env:add /dev/stdin
+op inject -i .env -a <app_id> --account <account_id> | deno task env:add -a <app_id> /dev/stdin
+```
+
+### 4. Deploy to Slack
 
 ```sh
 slack deploy
 ```
 
-### 4. Create triggers
+### 5. Create triggers
 
 After deployment, create shortcut triggers in your approval channel:
 

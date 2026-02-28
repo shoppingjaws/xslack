@@ -45,13 +45,34 @@ cp .env.sample .env
 | `X_PREVENT_SELF_APPROVE` | `true` にすると投稿者自身の承認を禁止 |
 | `X_POSTED_CHANNEL_ID` | 投稿完了通知を送信するチャンネルID |
 
-### 3. Slackへのデプロイ
+### 3. 環境変数の一括追加
+
+`.env` の環境変数をSlackにまとめて追加します：
+
+```sh
+deno task env:add .env
+```
+
+アプリIDを指定する場合：
+
+```sh
+deno task env:add -a <app_id> .env
+```
+
+[1Password CLI](https://developer.1password.com/docs/cli/) でシークレットを管理している場合、`op://` 参照を解決しつつ追加できます：
+
+```sh
+op inject -i .env | deno task env:add /dev/stdin
+op inject -i .env --account <account_id> | deno task env:add -a <app_id> /dev/stdin
+```
+
+### 4. Slackへのデプロイ
 
 ```sh
 slack deploy
 ```
 
-### 4. トリガーの作成
+### 5. トリガーの作成
 
 デプロイ後、承認チャンネルにショートカットトリガーを作成します：
 

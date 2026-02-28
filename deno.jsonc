@@ -18,7 +18,8 @@
   },
   "lock": false,
   "tasks": {
-    "test": "deno fmt --check && deno lint"
+    "test": "deno fmt --check && deno lint",
+    "env:add": "bash scripts/slack-env-add.sh"
   },
   "imports": {
     "deno-slack-sdk/": "https://deno.land/x/deno_slack_sdk@2.15.1/",
