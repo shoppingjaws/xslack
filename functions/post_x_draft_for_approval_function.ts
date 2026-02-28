@@ -11,6 +11,7 @@ import {
 import { uploadMultipleMedia } from "./libs/x_media_upload.ts";
 import { countXCharacters } from "./libs/x_char_count.ts";
 import PostScheduledTweetWorkflow from "../workflows/post_scheduled_tweet_workflow.ts";
+import { PendingApprovalsDatastore } from "../datastores/pending_approvals.ts";
 
 const APPROVE_ACTION_ID = "x_draft_approve";
 const REJECT_ACTION_ID = "x_draft_reject";
@@ -266,6 +267,25 @@ export default SlackFunction(
         });
       }
 
+      // Datastoreに未承認ドラフトを保存
+      if (postResult.ok && postResult.ts) {
+        const id = `${approvalChannelId}_${postResult.ts}`;
+        await client.apps.datastore.put({
+          datastore: PendingApprovalsDatastore.name,
+          item: {
+            id,
+            channel_id: approvalChannelId,
+            message_ts: postResult.ts,
+            draft_text: draftText,
+            author_user_id: authorUserId,
+            scheduled_date: scheduledDate,
+            scheduled_time: scheduledTime,
+            image_file_ids: imageFileIds,
+            created_at: Date.now(),
+          },
+        });
+      }
+
       // Post image previews in thread using slack_file image blocks
       if (imageCount > 0 && postResult.ok) {
         // deno-lint-ignore no-explicit-any
@@ -297,6 +317,15 @@ export default SlackFunction(
       const channelId = body.message?.channel_id ??
         getEnv(env, "X_APPROVAL_CHANNEL_ID");
       const authorUserId = body.function_data.inputs.author_user_id;
+
+      // Datastoreから未承認エントリを削除
+      if (messageTs && channelId) {
+        const pendingId = `${channelId}_${messageTs}`;
+        await client.apps.datastore.delete({
+          datastore: PendingApprovalsDatastore.name,
+          id: pendingId,
+        });
+      }
 
       // Parse approval data from button value
       const approvalData: ApprovalData = JSON.parse(action.value);

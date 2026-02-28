@@ -5,6 +5,8 @@ import { ListScheduledTweetsFunctionDefinition } from "./functions/list_schedule
 import XDraftApprovalWorkflow from "./workflows/x_draft_approval_workflow.ts";
 import PostScheduledTweetWorkflow from "./workflows/post_scheduled_tweet_workflow.ts";
 import ListScheduledTweetsWorkflow from "./workflows/list_scheduled_tweets_workflow.ts";
+import { ActiveListMessagesDatastore } from "./datastores/active_list_messages.ts";
+import { PendingApprovalsDatastore } from "./datastores/pending_approvals.ts";
 
 export default Manifest({
   name: "xslack",
@@ -20,6 +22,7 @@ export default Manifest({
     PostScheduledTweetFunctionDefinition,
     ListScheduledTweetsFunctionDefinition,
   ],
+  datastores: [ActiveListMessagesDatastore, PendingApprovalsDatastore],
   outgoingDomains: ["api.x.com", "upload.twitter.com", "files.slack.com"],
   botScopes: [
     "commands",
@@ -28,5 +31,7 @@ export default Manifest({
     "triggers:read",
     "triggers:write",
     "files:read",
+    "datastore:read",
+    "datastore:write",
   ],
 });

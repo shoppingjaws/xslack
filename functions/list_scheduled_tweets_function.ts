@@ -8,9 +8,12 @@ import {
   parseFileIds,
 } from "./libs/slack_file_downloader.ts";
 import { uploadMultipleMedia } from "./libs/x_media_upload.ts";
+import { ActiveListMessagesDatastore } from "../datastores/active_list_messages.ts";
+import { PendingApprovalsDatastore } from "../datastores/pending_approvals.ts";
 
 const CANCEL_ACTION_ID = "cancel_scheduled_tweet";
 const POST_NOW_ACTION_ID = "post_now_scheduled_tweet";
+const TTL_HOURS = 24;
 
 function getEnv(env: Record<string, string>, key: string): string {
   return env[key] ?? "";
@@ -50,10 +53,9 @@ function filterScheduledTweetTriggers(triggers: any[]): any[] {
   );
 }
 
-// deno-lint-ignore no-explicit-any
-function buildListBlocks(triggers: any[]): any[] {
-  // deno-lint-ignore no-explicit-any
-  const blocks: any[] = [
+
+function buildEmptyBlocks(message: string) {
+  return [
     {
       type: "header",
       text: {
@@ -62,42 +64,38 @@ function buildListBlocks(triggers: any[]): any[] {
       },
     },
     {
-      type: "context",
-      elements: [
-        {
-          type: "mrkdwn",
-          text: `全 ${triggers.length} 件の予約投稿`,
-        },
-      ],
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: message,
+      },
     },
-    { type: "divider" },
   ];
+}
 
-  for (const trigger of triggers) {
-    const draftText = trigger.inputs?.draft_text?.value ?? "(内容不明)";
-    const authorUserId = trigger.inputs?.author_user_id?.value;
-    const approvalChannelId = trigger.inputs?.channel_id?.value;
-    const approvalMessageTs = trigger.inputs?.message_ts?.value;
-    const scheduledAt = trigger.schedule?.start_time;
+// deno-lint-ignore no-explicit-any
+function buildPendingApprovalBlocks(pendingApprovals: any[]): any[] {
+  // deno-lint-ignore no-explicit-any
+  const blocks: any[] = [];
 
-    let scheduleDisplay = "不明";
-    if (scheduledAt) {
-      const date = new Date(scheduledAt);
-      scheduleDisplay = date.toLocaleString("ja-JP", {
-        timeZone: "Asia/Tokyo",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    }
+  for (const approval of pendingApprovals) {
+    const draftText = approval.draft_text ?? "(内容不明)";
+    const authorUserId = approval.author_user_id;
+    const channelId = approval.channel_id;
+    const messageTs = approval.message_ts;
+    const scheduledDate = approval.scheduled_date;
+    const scheduledTime = approval.scheduled_time;
+
+    const hasSchedule = scheduledDate && scheduledTime;
+    const scheduleText = hasSchedule
+      ? `予約予定: ${scheduledDate} ${scheduledTime} (JST)`
+      : "即投稿（承認後）";
 
     let approvalLink = "";
-    if (approvalChannelId && approvalMessageTs) {
-      const tsForUrl = approvalMessageTs.replace(".", "");
+    if (channelId && messageTs) {
+      const tsForUrl = messageTs.replace(".", "");
       approvalLink =
-        ` | <https://slack.com/archives/${approvalChannelId}/p${tsForUrl}|承認メッセージ>`;
+        ` | <https://slack.com/archives/${channelId}/p${tsForUrl}|承認メッセージ>`;
     }
 
     blocks.push(
@@ -113,42 +111,7 @@ function buildListBlocks(triggers: any[]): any[] {
         elements: [
           {
             type: "mrkdwn",
-            text: `投稿者: ${authorUserId ? `<@${authorUserId}>` : "不明"} | 予約日時: ${scheduleDisplay} (JST)${approvalLink}`,
-          },
-        ],
-      },
-      {
-        type: "actions",
-        elements: [
-          {
-            type: "button",
-            action_id: POST_NOW_ACTION_ID,
-            text: { type: "plain_text", text: "今すぐ投稿" },
-            style: "primary",
-            value: JSON.stringify({
-              trigger_id: trigger.id,
-              draft_text: trigger.inputs?.draft_text?.value,
-              channel_id: trigger.inputs?.channel_id?.value,
-              author_user_id: trigger.inputs?.author_user_id?.value,
-              message_ts: trigger.inputs?.message_ts?.value,
-              image_file_ids: trigger.inputs?.image_file_ids?.value ?? "",
-            }),
-            confirm: {
-              title: { type: "plain_text", text: "確認" },
-              text: {
-                type: "plain_text",
-                text: "この投稿を今すぐXに投稿しますか？",
-              },
-              confirm: { type: "plain_text", text: "投稿する" },
-              deny: { type: "plain_text", text: "やめる" },
-            },
-          },
-          {
-            type: "button",
-            action_id: CANCEL_ACTION_ID,
-            text: { type: "plain_text", text: "キャンセル" },
-            style: "danger",
-            value: trigger.id,
+            text: `投稿者: ${authorUserId ? `<@${authorUserId}>` : "不明"} | ${scheduleText}${approvalLink}`,
           },
         ],
       },
@@ -157,6 +120,236 @@ function buildListBlocks(triggers: any[]): any[] {
   }
 
   return blocks;
+}
+
+// deno-lint-ignore no-explicit-any
+function buildFullListBlocks(triggers: any[], pendingApprovals: any[]): any[] {
+  // deno-lint-ignore no-explicit-any
+  const blocks: any[] = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "投稿一覧",
+      },
+    },
+  ];
+
+  if (pendingApprovals.length > 0) {
+    blocks.push(
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `*:hourglass: 承認待ち:* ${pendingApprovals.length} 件`,
+          },
+        ],
+      },
+      { type: "divider" },
+      ...buildPendingApprovalBlocks(pendingApprovals),
+    );
+  }
+
+  if (triggers.length > 0) {
+    blocks.push(
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `*:clock1: 予約投稿:* ${triggers.length} 件`,
+          },
+        ],
+      },
+      { type: "divider" },
+    );
+
+    for (const trigger of triggers) {
+      const draftText = trigger.inputs?.draft_text?.value ?? "(内容不明)";
+      const authorUserId = trigger.inputs?.author_user_id?.value;
+      const approvalChannelId = trigger.inputs?.channel_id?.value;
+      const approvalMessageTs = trigger.inputs?.message_ts?.value;
+      const scheduledAt = trigger.schedule?.start_time;
+
+      let scheduleDisplay = "不明";
+      if (scheduledAt) {
+        const date = new Date(scheduledAt);
+        scheduleDisplay = date.toLocaleString("ja-JP", {
+          timeZone: "Asia/Tokyo",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      }
+
+      let approvalLink = "";
+      if (approvalChannelId && approvalMessageTs) {
+        const tsForUrl = approvalMessageTs.replace(".", "");
+        approvalLink =
+          ` | <https://slack.com/archives/${approvalChannelId}/p${tsForUrl}|承認メッセージ>`;
+      }
+
+      blocks.push(
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `>>> ${draftText}`,
+          },
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `投稿者: ${authorUserId ? `<@${authorUserId}>` : "不明"} | 予約日時: ${scheduleDisplay} (JST)${approvalLink}`,
+            },
+          ],
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              action_id: POST_NOW_ACTION_ID,
+              text: { type: "plain_text", text: "今すぐ投稿" },
+              style: "primary",
+              value: JSON.stringify({
+                trigger_id: trigger.id,
+                draft_text: trigger.inputs?.draft_text?.value,
+                channel_id: trigger.inputs?.channel_id?.value,
+                author_user_id: trigger.inputs?.author_user_id?.value,
+                message_ts: trigger.inputs?.message_ts?.value,
+                image_file_ids: trigger.inputs?.image_file_ids?.value ?? "",
+              }),
+              confirm: {
+                title: { type: "plain_text", text: "確認" },
+                text: {
+                  type: "plain_text",
+                  text: "この投稿を今すぐXに投稿しますか？",
+                },
+                confirm: { type: "plain_text", text: "投稿する" },
+                deny: { type: "plain_text", text: "やめる" },
+              },
+            },
+            {
+              type: "button",
+              action_id: CANCEL_ACTION_ID,
+              text: { type: "plain_text", text: "キャンセル" },
+              style: "danger",
+              value: trigger.id,
+            },
+          ],
+        },
+        { type: "divider" },
+      );
+    }
+  }
+
+  return blocks;
+}
+
+// deno-lint-ignore no-explicit-any
+async function queryPendingApprovals(client: any): Promise<any[]> {
+  const queryResult = await client.apps.datastore.query({
+    datastore: PendingApprovalsDatastore.name,
+  });
+  return queryResult.ok ? (queryResult.items ?? []) : [];
+}
+
+// deno-lint-ignore no-explicit-any
+async function updateAllListMessages(client: any, logger: any) {
+  // 現在のトリガー一覧を取得
+  const listResult = await client.workflows.triggers.list({
+    is_owner: true,
+  });
+  const remainingTriggers = filterScheduledTweetTriggers(
+    listResult.triggers ?? [],
+  );
+
+  // 承認待ち一覧を取得
+  const pendingApprovals = await queryPendingApprovals(client);
+
+  // Datastoreから全アクティブリストメッセージを取得
+  const queryResult = await client.apps.datastore.query({
+    datastore: ActiveListMessagesDatastore.name,
+  });
+
+  if (!queryResult.ok) {
+    await logger.error("Failed to query active list messages", {
+      error: queryResult.error,
+    });
+    return { remainingTriggers };
+  }
+
+  const entries = queryResult.items ?? [];
+
+  // 期限切れエントリを除外（24h TTL）
+  const now = Date.now();
+  const activeEntries = entries.filter(
+    // deno-lint-ignore no-explicit-any
+    (e: any) => !e.expire_ts || e.expire_ts > now,
+  );
+  const expiredEntries = entries.filter(
+    // deno-lint-ignore no-explicit-any
+    (e: any) => e.expire_ts && e.expire_ts <= now,
+  );
+
+  // 期限切れエントリを削除
+  for (const entry of expiredEntries) {
+    await client.apps.datastore.delete({
+      datastore: ActiveListMessagesDatastore.name,
+      id: entry.id,
+    });
+  }
+
+  const totalItems = remainingTriggers.length + pendingApprovals.length;
+
+  if (totalItems === 0) {
+    // 全件処理済み: 全リストを「処理済み」に更新し、エントリを削除
+    for (const entry of activeEntries) {
+      try {
+        await client.chat.update({
+          channel: entry.channel_id,
+          ts: entry.message_ts,
+          text: "予約投稿はすべて処理されました。",
+          blocks: buildEmptyBlocks("予約投稿はすべて処理されました。"),
+        });
+      } catch {
+        // メッセージ削除済みなど - スキップ
+      }
+      await client.apps.datastore.delete({
+        datastore: ActiveListMessagesDatastore.name,
+        id: entry.id,
+      });
+    }
+  } else {
+    // 残りのアイテムでリストを更新
+    const blocks = buildFullListBlocks(remainingTriggers, pendingApprovals);
+    const text = `投稿一覧（予約: ${remainingTriggers.length}件, 承認待ち: ${pendingApprovals.length}件）`;
+
+    for (const entry of activeEntries) {
+      const updateResult = await client.chat.update({
+        channel: entry.channel_id,
+        ts: entry.message_ts,
+        text,
+        blocks,
+        unfurl_links: false,
+      });
+      if (!updateResult.ok) {
+        // メッセージ更新失敗（削除済みなど）→ エントリを削除してスキップ
+        await client.apps.datastore.delete({
+          datastore: ActiveListMessagesDatastore.name,
+          id: entry.id,
+        });
+      }
+    }
+  }
+
+  return { remainingTriggers };
 }
 
 export default SlackFunction(
@@ -178,7 +371,7 @@ export default SlackFunction(
         });
         await client.chat.postMessage({
           channel: channelId,
-          text: `予約投稿一覧の取得に失敗しました: ${listResult.error}`,
+          text: `投稿一覧の取得に失敗しました: ${listResult.error}`,
         });
         return { error: `Failed to list triggers: ${listResult.error}` };
       }
@@ -187,40 +380,53 @@ export default SlackFunction(
         listResult.triggers ?? [],
       );
 
-      if (scheduledTriggers.length === 0) {
+      // 承認待ち一覧を取得
+      const pendingApprovals = await queryPendingApprovals(client);
+
+      const totalItems = scheduledTriggers.length + pendingApprovals.length;
+
+      if (totalItems === 0) {
         await client.chat.postMessage({
           channel: channelId,
-          text: "予約されている投稿はありません。",
-          blocks: [
-            {
-              type: "header",
-              text: {
-                type: "plain_text",
-                text: "予約投稿一覧",
-              },
-            },
-            {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: "予約されている投稿はありません。",
-              },
-            },
-          ],
+          text: "予約・承認待ちの投稿はありません。",
+          blocks: buildEmptyBlocks("予約・承認待ちの投稿はありません。"),
         });
         return { outputs: {} };
       }
 
-      const blocks = buildListBlocks(scheduledTriggers);
+      const blocks = buildFullListBlocks(scheduledTriggers, pendingApprovals);
+      const text =
+        `投稿一覧（予約: ${scheduledTriggers.length}件, 承認待ち: ${pendingApprovals.length}件）`;
 
-      await client.chat.postMessage({
+      const postResult = await client.chat.postMessage({
         channel: channelId,
-        text: `予約投稿一覧（${scheduledTriggers.length}件）`,
+        text,
         blocks,
         unfurl_links: false,
       });
 
-      return { completed: false };
+      // Datastoreにリストメッセージ情報を保存
+      if (postResult.ok && postResult.ts) {
+        const id = `${channelId}_${postResult.ts}`;
+        const expireTs = Date.now() + TTL_HOURS * 60 * 60 * 1000;
+        await client.apps.datastore.put({
+          datastore: ActiveListMessagesDatastore.name,
+          item: {
+            id,
+            channel_id: channelId,
+            message_ts: postResult.ts,
+            expire_ts: expireTs,
+          },
+        });
+      }
+
+      // 予約投稿がある場合はアクションハンドラのために未完了にする
+      if (scheduledTriggers.length > 0) {
+        return { completed: false };
+      }
+
+      // 承認待ちのみの場合はアクションボタンがないので完了
+      return { outputs: {} };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       await logger.error("List scheduled tweets failed", error);
@@ -250,11 +456,13 @@ export default SlackFunction(
           triggerId,
           error: deleteResult.error,
         });
+        // 既に処理済みの可能性 → 全リスト更新
+        await updateAllListMessages(client, logger);
         if (messageTs) {
           await client.chat.postMessage({
             channel: channelId,
             thread_ts: messageTs,
-            text: `予約投稿のキャンセルに失敗しました: ${deleteResult.error}`,
+            text: `この予約投稿は既に処理済みです。`,
           });
         }
         return;
@@ -262,57 +470,18 @@ export default SlackFunction(
 
       await logger.log("Scheduled tweet cancelled", { triggerId });
 
-      // Re-fetch remaining triggers
-      const listResult = await client.workflows.triggers.list({
-        is_owner: true,
-      });
-      const remainingTriggers = filterScheduledTweetTriggers(
-        listResult.triggers ?? [],
+      // 全リストメッセージを更新
+      const { remainingTriggers } = await updateAllListMessages(
+        client,
+        logger,
       );
 
+      // トリガーが0件なら自身のfunction executionを完了
       if (remainingTriggers.length === 0) {
-        // All cancelled - update message and complete
-        if (messageTs) {
-          await client.chat.update({
-            channel: channelId,
-            ts: messageTs,
-            text: "予約投稿はすべてキャンセルされました。",
-            blocks: [
-              {
-                type: "header",
-                text: {
-                  type: "plain_text",
-                  text: "予約投稿一覧",
-                },
-              },
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: "予約投稿はすべてキャンセルされました。",
-                },
-              },
-            ],
-          });
-        }
-
         await client.functions.completeSuccess({
           function_execution_id: executionId,
           outputs: {},
         });
-      } else {
-        // Still remaining - update the list
-        const blocks = buildListBlocks(remainingTriggers);
-
-        if (messageTs) {
-          await client.chat.update({
-            channel: channelId,
-            ts: messageTs,
-            text: `予約投稿一覧（${remainingTriggers.length}件）- 1件キャンセルしました`,
-            blocks,
-            unfurl_links: false,
-          });
-        }
       }
     } catch (error) {
       await logger.error("Cancel scheduled tweet failed", error);
@@ -358,6 +527,28 @@ export default SlackFunction(
     }
 
     try {
+      // 1. トリガー削除（楽観ロック）
+      const deleteResult = await client.workflows.triggers.delete({
+        trigger_id: triggerData.trigger_id,
+      });
+
+      if (!deleteResult.ok) {
+        // 削除失敗 → 既に処理済み
+        await logger.log("Trigger already deleted (duplicate post prevented)", {
+          triggerId: triggerData.trigger_id,
+        });
+        await updateAllListMessages(client, logger);
+        if (listMessageTs) {
+          await client.chat.postMessage({
+            channel: listChannelId,
+            thread_ts: listMessageTs,
+            text: "この予約投稿は既に処理済みです。",
+          });
+        }
+        return;
+      }
+
+      // 2. トリガー削除成功 → ツイート投稿
       const credentials = {
         consumerKey: getEnv(env, "X_CONSUMER_KEY"),
         consumerSecret: getEnv(env, "X_CONSUMER_SECRET"),
@@ -383,20 +574,37 @@ export default SlackFunction(
         }
       }
 
-      const result = await postTweet(
-        triggerData.draft_text,
-        credentials,
-        mediaIds,
-      );
+      let tweetResult: { id: string };
+      try {
+        tweetResult = await postTweet(
+          triggerData.draft_text,
+          credentials,
+          mediaIds,
+        );
+      } catch (postError) {
+        // 投稿失敗（トリガーは既に削除済み）
+        const postErrorMsg = postError instanceof Error
+          ? postError.message
+          : String(postError);
+        await logger.error("Post now tweet failed after trigger deletion", {
+          triggerId: triggerData.trigger_id,
+          error: postErrorMsg,
+        });
+        await updateAllListMessages(client, logger);
+        if (listMessageTs) {
+          await client.chat.postMessage({
+            channel: listChannelId,
+            thread_ts: listMessageTs,
+            text:
+              `ツイート投稿に失敗しました: ${postErrorMsg}\n予約トリガーは削除済みのため、再度ドラフトを作成してください。`,
+          });
+        }
+        return;
+      }
 
       await logger.log("Post now tweet posted", {
-        tweetId: result.id,
+        tweetId: tweetResult.id,
         author: triggerData.author_user_id,
-      });
-
-      // スケジュールトリガーを削除
-      await client.workflows.triggers.delete({
-        trigger_id: triggerData.trigger_id,
       });
 
       // 元の承認メッセージスレッドに投稿完了通知
@@ -405,59 +613,22 @@ export default SlackFunction(
           channel: triggerData.channel_id,
           thread_ts: triggerData.message_ts,
           text:
-            `今すぐ投稿されました。\nTweet ID: ${result.id}\nhttps://x.com/i/status/${result.id}`,
+            `今すぐ投稿されました。\nTweet ID: ${tweetResult.id}\nhttps://x.com/i/status/${tweetResult.id}`,
         });
       }
 
-      // 一覧メッセージを更新
-      const listResult = await client.workflows.triggers.list({
-        is_owner: true,
-      });
-      const remainingTriggers = filterScheduledTweetTriggers(
-        listResult.triggers ?? [],
+      // 全リストメッセージを更新
+      const { remainingTriggers } = await updateAllListMessages(
+        client,
+        logger,
       );
 
+      // トリガーが0件なら自身のfunction executionを完了
       if (remainingTriggers.length === 0) {
-        if (listMessageTs) {
-          await client.chat.update({
-            channel: listChannelId,
-            ts: listMessageTs,
-            text: "予約投稿はすべて処理されました。",
-            blocks: [
-              {
-                type: "header",
-                text: {
-                  type: "plain_text",
-                  text: "予約投稿一覧",
-                },
-              },
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: "予約投稿はすべて処理されました。",
-                },
-              },
-            ],
-          });
-        }
-
         await client.functions.completeSuccess({
           function_execution_id: executionId,
           outputs: {},
         });
-      } else {
-        const blocks = buildListBlocks(remainingTriggers);
-
-        if (listMessageTs) {
-          await client.chat.update({
-            channel: listChannelId,
-            ts: listMessageTs,
-            text: `予約投稿一覧（${remainingTriggers.length}件）- 1件投稿しました`,
-            blocks,
-            unfurl_links: false,
-          });
-        }
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
