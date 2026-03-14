@@ -320,15 +320,6 @@ export default SlackFunction(
         getEnv(env, "X_APPROVAL_CHANNEL_ID");
       const authorUserId = body.function_data.inputs.author_user_id;
 
-      // Datastoreから未承認エントリを削除
-      if (messageTs && channelId) {
-        const pendingId = `${channelId}_${messageTs}`;
-        await client.apps.datastore.delete({
-          datastore: PendingApprovalsDatastore.name,
-          id: pendingId,
-        });
-      }
-
       // Parse approval data from button value
       const approvalData: ApprovalData = JSON.parse(action.value);
       const {
@@ -339,6 +330,7 @@ export default SlackFunction(
       } = approvalData;
 
       // 投稿者自身による承認を禁止（環境変数で制御）
+      // ※ Datastore削除の前にチェックし、自己承認時にデータが消失しないようにする
       if (
         action.action_id === APPROVE_ACTION_ID &&
         getEnv(env, "X_PREVENT_SELF_APPROVE") === "true" &&
@@ -350,6 +342,15 @@ export default SlackFunction(
           text: "自分が作成したドラフトを自分で承認することはできません。他のメンバーに承認を依頼してください。",
         });
         return;
+      }
+
+      // Datastoreから未承認エントリを削除
+      if (messageTs && channelId) {
+        const pendingId = `${channelId}_${messageTs}`;
+        await client.apps.datastore.delete({
+          datastore: PendingApprovalsDatastore.name,
+          id: pendingId,
+        });
       }
 
       if (action.action_id === APPROVE_ACTION_ID) {
