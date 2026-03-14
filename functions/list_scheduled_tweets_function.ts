@@ -264,6 +264,15 @@ function buildFullListBlocks(triggers: any[], pendingApprovals: any[]): any[] {
               text: { type: "plain_text", text: "キャンセル" },
               style: "danger",
               value: trigger.id,
+              confirm: {
+                title: { type: "plain_text", text: "確認" },
+                text: {
+                  type: "plain_text",
+                  text: "この予約投稿をキャンセルしますか？この操作は取り消せません。",
+                },
+                confirm: { type: "plain_text", text: "キャンセルする" },
+                deny: { type: "plain_text", text: "やめる" },
+              },
             },
           ],
         },
