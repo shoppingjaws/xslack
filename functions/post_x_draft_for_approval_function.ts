@@ -15,6 +15,7 @@ import { PendingApprovalsDatastore } from "../datastores/pending_approvals.ts";
 
 const APPROVE_ACTION_ID = "x_draft_approve";
 const REJECT_ACTION_ID = "x_draft_reject";
+const CANCEL_SCHEDULE_ACTION_ID = "x_draft_cancel_schedule";
 const VIEW_CALLBACK_ID = "x_draft_form";
 
 interface ApprovalData {
@@ -450,17 +451,36 @@ export default SlackFunction(
                       },
                     ],
                   },
+                  {
+                    type: "actions",
+                    elements: [
+                      {
+                        type: "button",
+                        action_id: CANCEL_SCHEDULE_ACTION_ID,
+                        text: { type: "plain_text", text: "予約キャンセル" },
+                        style: "danger",
+                        value: triggerResult.trigger?.id,
+                        confirm: {
+                          title: { type: "plain_text", text: "確認" },
+                          text: {
+                            type: "plain_text",
+                            text:
+                              "この予約投稿をキャンセルしますか？この操作は取り消せません。",
+                          },
+                          confirm: {
+                            type: "plain_text",
+                            text: "キャンセルする",
+                          },
+                          deny: { type: "plain_text", text: "やめる" },
+                        },
+                      },
+                    ],
+                  },
                 ],
               });
             }
 
-            await client.functions.completeSuccess({
-              function_execution_id: executionId,
-              outputs: {
-                status: "scheduled",
-                tweet_id: "",
-              },
-            });
+            // 予約キャンセルボタンのためにfunction executionを維持する
           } else {
             // 即投稿
             const credentials = {
@@ -624,6 +644,96 @@ export default SlackFunction(
             tweet_id: "",
           },
         });
+      }
+    },
+  )
+  .addBlockActionsHandler(
+    [CANCEL_SCHEDULE_ACTION_ID],
+    async ({ action, body, env, token }) => {
+      const logger = createSlackLogger(token);
+      const client = SlackAPI(token);
+
+      const executionId = body.function_data.execution_id;
+      const triggerId = action.value;
+      const messageTs = body.message?.ts;
+      const channelId = body.message?.channel_id ??
+        getEnv(env, "X_APPROVAL_CHANNEL_ID");
+
+      try {
+        const deleteResult = await client.workflows.triggers.delete({
+          trigger_id: triggerId,
+        });
+
+        if (!deleteResult.ok) {
+          await logger.error("Failed to delete scheduled trigger", {
+            triggerId,
+            error: deleteResult.error,
+          });
+          if (messageTs) {
+            await client.chat.postMessage({
+              channel: channelId,
+              thread_ts: messageTs,
+              text: "この予約投稿は既に処理済みです。",
+            });
+          }
+        } else {
+          await logger.log("Scheduled tweet cancelled from approval message", {
+            triggerId,
+          });
+        }
+
+        // メッセージからキャンセルボタンを除去し、キャンセル済み表示に更新
+        if (messageTs) {
+          await client.chat.update({
+            channel: channelId,
+            ts: messageTs,
+            text: "X投稿予約がキャンセルされました",
+            blocks: [
+              {
+                type: "header",
+                text: {
+                  type: "plain_text",
+                  text: "X投稿ドラフト - 予約キャンセル済み",
+                },
+              },
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*投稿者:* <@${body.function_data.inputs.author_user_id}>`,
+                },
+              },
+              {
+                type: "context",
+                elements: [
+                  {
+                    type: "mrkdwn",
+                    text: `キャンセル実行者: <@${body.user.id}>`,
+                  },
+                ],
+              },
+            ],
+          });
+        }
+
+        await client.functions.completeSuccess({
+          function_execution_id: executionId,
+          outputs: {
+            status: "cancelled",
+            tweet_id: "",
+          },
+        });
+      } catch (error) {
+        await logger.error("Cancel scheduled tweet from approval failed", error);
+        if (messageTs) {
+          await client.chat.postMessage({
+            channel: channelId,
+            thread_ts: messageTs,
+            text: `キャンセル処理中にエラーが発生しました: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          });
+        }
       }
     },
   );
