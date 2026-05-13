@@ -47,11 +47,14 @@ export const ListScheduledTweetsFunctionDefinition = DefineFunction({
 
 // deno-lint-ignore no-explicit-any
 function filterScheduledTweetTriggers(triggers: any[]): any[] {
+  const now = new Date();
   return triggers.filter(
     // deno-lint-ignore no-explicit-any
     (t: any) =>
       t.type === "scheduled" &&
-      t.workflow?.callback_id === "post_scheduled_tweet_workflow",
+      t.workflow?.callback_id === "post_scheduled_tweet_workflow" &&
+      t.schedule?.start_time &&
+      new Date(t.schedule.start_time) > now,
   );
 }
 
